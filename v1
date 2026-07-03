@@ -1,0 +1,66 @@
+import os
+import csv
+import tkinter as tk
+from tkinter import ttk, messagebox
+from datetime import datetime, timedelta
+from tkcalendar import DateEntry
+
+class BikerRentalApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Biker Haaglanden - Fietsverhuur")
+        self.root.geometry("800x600")
+        self.csv_bestand = 'verhuur_data.csv'
+        self.init_csv()
+        self.create_widgets()
+
+    def init_csv(self):
+        if not os.path.exists(self.csv_bestand):
+            with open(self.csv_bestand, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['ReserveringsID', 'Datum', 'Naam', 'Email', 'Stadfietsen', 'Ebikes', 'Startdatum', 'Einddatum', 'Totaalprijs'])
+
+    def create_widgets(self):
+        # Basis invoervelden
+        ttk.Label(self.root, text="Naam:").pack(anchor=tk.W, padx=10, pady=2)
+        self.naam_var = tk.StringVar()
+        ttk.Entry(self.root, textvariable=self.naam_var).pack(fill=tk.X, padx=10, pady=2)
+
+        ttk.Label(self.root, text="Email:").pack(anchor=tk.W, padx=10, pady=2)
+        self.email_var = tk.StringVar()
+        ttk.Entry(self.root, textvariable=self.email_var).pack(fill=tk.X, padx=10, pady=2)
+
+        ttk.Label(self.root, text="Aantal Stadsfietsen (€15/dg):").pack(anchor=tk.W, padx=10, pady=2)
+        self.stad_var = tk.IntVar(value=0)
+        ttk.Spinbox(self.root, from_=0, to=10, textvariable=self.stad_var).pack(anchor=tk.W, padx=10, pady=2)
+
+        ttk.Label(self.root, text="Aantal E-bikes (€25/dg):").pack(anchor=tk.W, padx=10, pady=2)
+        self.elek_var = tk.IntVar(value=0)
+        ttk.Spinbox(self.root, from_=0, to=10, textvariable=self.elek_var).pack(anchor=tk.W, padx=10, pady=2)
+
+        ttk.Label(self.root, text="Startdatum:").pack(anchor=tk.W, padx=10, pady=2)
+        self.start_datum = DateEntry(self.root)
+        self.start_datum.pack(anchor=tk.W, padx=10, pady=2)
+
+        ttk.Label(self.root, text="Einddatum:").pack(anchor=tk.W, padx=10, pady=2)
+        self.eind_datum = DateEntry(self.root)
+        self.eind_datum.pack(anchor=tk.W, padx=10, pady=2)
+
+        tk.Button(self.root, text="RESERVEER", command=self.reserveer).pack(padx=10, pady=20)
+
+    def reserveer(self):
+        start = self.start_datum.get_date()
+        eind = self.eind_datum.get_date()
+        dagen = max(1, (eind - start).days)
+        
+        prijs = (self.stad_var.get() * 15 + self.elek_var.get() * 25) * dagen
+        res_id = f"RES{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        
+        with open(self.csv_bestand, 'a', newline='', encoding='utf-8') as f:
+            csv.writer(f).writerow([res_id, datetime.now().strftime("%Y-%m-%d"), self.naam_var.get(), self.email_var.get(), self.stad_var.get(), self.elek_var.get(), start, eind, prijs])
+        messagebox.showinfo("Succes", f"Gereserveerd! Totaal: €{prijs:.2f}")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    BikerRentalApp(root)
+    root.mainloop()
