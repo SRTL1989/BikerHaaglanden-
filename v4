@@ -1,0 +1,394 @@
+"""
+Onderdeel: Biker Haaglanden - Fietsverhuur Applicatie
+Ontwikkeld in opdracht van: De Haagse Hogeschool
+Huisstijl-architectuur: Modern, minimalistisch, asymmetrisch met veel negatieve ruimte.
+Ondersteunt: Meerdere fietstypen, dynamische prijsberekening en medewerkersportaal.
+"""
+
+import os
+import re
+import csv
+import tkinter as tk
+from tkinter import ttk, messagebox
+from decimal import Decimal
+from datetime import datetime, timedelta
+from tkcalendar import DateEntry
+
+
+class LoginWindow:
+    """
+    Sub-systeem: Medewerkersportaal (Login)
+    Verantwoordelijk voor authenticatie alvorens toegang tot het hoofdscherm wordt verleend.
+    """
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Biker Haaglanden - Inloggen")
+        self.root.geometry("450x350")
+        self.root.resizable(False, False)
+        
+        # UI-Branding: Donkerblauwe corporate achtergrond van De Haagse Hogeschool
+        self.root.configure(bg="#26384A")
+
+        # Centraal wit contentblok voor een clean en minimalistisch contrast
+        login_frame = tk.Frame(self.root, bg="#FFFFFF", padx=30, pady=30)
+        login_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        # Typografie: Grote, krachtige schreefloze kop
+        ttk.Label(login_frame, text="Medewerker Portaal", font=('Source Sans Pro', 22, 'bold'), 
+                  foreground='#26384A', background='#FFFFFF').pack(anchor=tk.W, pady=(0, 20))
+
+        # Input-architectuur
+        ttk.Label(login_frame, text="Gebruikersnaam", font=('Source Sans Pro', 11, 'bold'), 
+                  foreground='#26384A', background='#FFFFFF').pack(anchor=tk.W, pady=(5, 2))
+        self.username_var = tk.StringVar()
+        self.username_entry = ttk.Entry(login_frame, textvariable=self.username_var, font=('Source Sans Pro', 12), width=30)
+        self.username_entry.pack(fill=tk.X, pady=(0, 10))
+        self.username_entry.focus_set()
+
+        ttk.Label(login_frame, text="Wachtwoord", font=('Source Sans Pro', 11, 'bold'), 
+                  foreground='#26384A', background='#FFFFFF').pack(anchor=tk.W, pady=(5, 2))
+        self.password_var = tk.StringVar()
+        self.password_entry = ttk.Entry(login_frame, textvariable=self.password_var, show="*", font=('Source Sans Pro', 12), width=30)
+        self.password_entry.pack(fill=tk.X, pady=(0, 20))
+
+        # Vlakke, moderne button-styling conform de UX-richtlijnen
+        self.login_btn = tk.Button(login_frame, text="INLOGGEN", command=self.check_login, 
+                                   font=('Source Sans Pro', 12, 'bold'), bg='#5A7188', fg='#FFFFFF', 
+                                   activebackground='#26384A', activeforeground='#FFFFFF', 
+                                   relief='flat', bd=0, cursor='hand2', pady=8)
+        self.login_btn.pack(fill=tk.X)
+
+        # Event binding voor verbeterde UX (inloggen via Enter-toets)
+        self.root.bind('<Return>', lambda event: self.check_login())
+
+    def check_login(self):
+        """Valideert de ingevoerde inloggegevens (Hardcoded demo-gegevens)"""
+        username = self.username_var.get().strip()
+        password = self.password_var.get().strip()
+
+        if username == "admin" and password == "biker2026":
+            self.root.destroy()
+            self.start_main_app()
+        else:
+            messagebox.showerror("Fout", "Onjuiste gebruikersnaam of wachtwoord!")
+            self.password_entry.delete(0, tk.END)
+
+    def start_main_app(self):
+        """Schakelt over van de login-omgeving naar het hoofd-verhuursysteem"""
+        main_root = tk.Tk()
+        try:
+            main_root.wm_iconbitmap('jouw_logo.ico')
+        except:
+            pass
+        BikerRentalApp(main_root)
+        main_root.mainloop()
+
+
+class BikerRentalApp:
+    """
+    Core-systeem: Fietsverhuur Management Systeem
+    Verwerkt de business logica, prijsberekeningen en persistentie (CSV).
+    """
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Biker Haaglanden - Fietsverhuur Systeem")
+        self.root.geometry("1200x850")
+        self.root.configure(bg="#F4F4F4")  # HHS Lichtgrijs als basis-canvas
+
+        # Bedrijfslogica: Financiële waarden gedefinieerd als Decimal ter voorkoming van float-fouten
+        self.prijzen = {
+            'stadfiets': Decimal('15.00'), 'elektrisch': Decimal('25.00'),
+            'helm': Decimal('3.00'), 'kinderzitje': Decimal('4.00')
+        }
+        self.borg = {'stadfiets': Decimal('50.00'), 'elektrisch': Decimal('100.00')}
+        self.csv_bestand = 'verhuur_data.csv'
+        
+        self.init_csv()
+        self.setup_styles()
+        self.create_widgets()
+
+    def setup_styles(self):
+        """Configureert de TTK-componenten centraal om de HHS-ontwerpfilosofie af te dwingen"""
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Globale stijl-overrides
+        style.configure('.', font=('Source Sans Pro', 11), background='#F4F4F4', foreground='#26384A')
+        style.configure('Content.TFrame', background='#FFFFFF')
+        style.configure('THHSR.TLabel', background='#FFFFFF', foreground='#26384A')
+        style.configure('THHSR_Sub.TLabel', background='#FFFFFF', foreground='#5A7188')
+        style.configure('THHSR_Check.TCheckbutton', background='#FFFFFF', foreground='#26384A')
+        style.configure('THHSR_Radio.TRadiobutton', background='#FFFFFF', foreground='#26384A')
+        
+        # Datatabel (Treeview) styling voor zakelijke en gestructureerde data-weergave
+        style.configure('Treeview', font=('Source Sans Pro', 10), background='#FFFFFF', foreground='#26384A', rowheight=25)
+        style.configure('Treeview.Heading', font=('Source Sans Pro', 10, 'bold'), background='#26384A', foreground='#FFFFFF')
+
+    def init_csv(self):
+        """Garandeert de aanwezigheid van de database-laag (CSV-bestand)"""
+        if not os.path.exists(self.csv_bestand):
+            try:
+                with open(self.csv_bestand, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(['ReserveringsID', 'Datum', 'Naam', 'Email', 'StadDames', 'StadHeren', 'ElekDames', 'ElekHeren', 'Helm', 'Kinderzitje', 'Startdatum', 'Einddatum', 'Dagen', 'Terugkerend', 'Betaalmethode', 'Borg', 'Totaalprijs', 'BetalingStatus', 'Status'])
+            except IOError as e:
+                messagebox.showerror("Fout", f"Kan CSV database niet initialiseren: {e}")
+                self.root.destroy()
+
+    def create_widgets(self):
+        """Bouwt de GUI op met een asymmetrische layout-structuur en veel ademruimte"""
+        container = ttk.Frame(self.root, padding="30", style='TFrame')
+        container.pack(fill=tk.BOTH, expand=True)
+        container.columnconfigure(0, weight=3)
+        container.columnconfigure(1, weight=1)
+
+        # ---------------- LINKERKOLOM: WIT CONTENTBLOK ----------------
+        main_frame = ttk.Frame(container, style='Content.TFrame', padding="40")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 20))
+
+        title_label = ttk.Label(main_frame, text="Biker Haaglanden", font=('Source Sans Pro', 28, 'bold'), style='THHSR.TLabel')
+        title_label.pack(anchor=tk.W, pady=(0, 2))
+        
+        subtitle_label = ttk.Label(main_frame, text="Fietsverhuur Den Haag — Connected met De Haagse Hogeschool", font=('Source Sans Pro', 12), style='THHSR_Sub.TLabel')
+        subtitle_label.pack(anchor=tk.W, pady=(0, 30))
+
+        # Sectie: Klantgegevens
+        ttk.Label(main_frame, text="Klantgegevens", font=('Source Sans Pro', 16, 'bold'), style='THHSR.TLabel').pack(anchor=tk.W, pady=(10, 10))
+        row_klant = ttk.Frame(main_frame, style='Content.TFrame')
+        row_klant.pack(fill=tk.X, pady=(0, 20))
+        
+        ttk.Label(row_klant, text="Naam:", style='THHSR.TLabel').pack(side=tk.LEFT, padx=(0, 10))
+        self.naam_var = tk.StringVar()
+        self.naam_entry = ttk.Entry(row_klant, textvariable=self.naam_var, font=('Source Sans Pro', 11), width=25)
+        self.naam_entry.pack(side=tk.LEFT, padx=(0, 20))
+
+        ttk.Label(row_klant, text="Email:", style='THHSR.TLabel').pack(side=tk.LEFT, padx=(0, 10))
+        self.email_var = tk.StringVar()
+        self.email_entry = ttk.Entry(row_klant, textvariable=self.email_var, font=('Source Sans Pro', 11), width=25)
+        self.email_entry.pack(side=tk.LEFT)
+
+        # Sectie: Aantallen
+        ttk.Label(main_frame, text="Aantal Fietsen", font=('Source Sans Pro', 16, 'bold'), style='THHSR.TLabel').pack(anchor=tk.W, pady=(10, 10))
+        grid_fietsen = ttk.Frame(main_frame, style='Content.TFrame')
+        grid_fietsen.pack(fill=tk.X, pady=(0, 20))
+
+        ttk.Label(grid_fietsen, text="Stadsfiets Dames:", style='THHSR.TLabel').grid(row=0, column=0, sticky=tk.W, pady=5, padx=(0, 10))
+        self.aantal_stad_dames = tk.IntVar(value=0)
+        ttk.Spinbox(grid_fietsen, from_=0, to=10, textvariable=self.aantal_stad_dames, width=5, command=self.update_prijs).grid(row=0, column=1, pady=5, padx=(0, 40))
+        
+        ttk.Label(grid_fietsen, text="Stadsfiets Heren:", style='THHSR.TLabel').grid(row=0, column=2, sticky=tk.W, pady=5, padx=(0, 10))
+        self.aantal_stad_heren = tk.IntVar(value=0)
+        ttk.Spinbox(grid_fietsen, from_=0, to=10, textvariable=self.aantal_stad_heren, width=5, command=self.update_prijs).grid(row=0, column=3, pady=5)
+
+        ttk.Label(grid_fietsen, text="Elektrische Dames:", style='THHSR.TLabel').grid(row=1, column=0, sticky=tk.W, pady=5, padx=(0, 10))
+        self.aantal_elek_dames = tk.IntVar(value=0)
+        ttk.Spinbox(grid_fietsen, from_=0, to=10, textvariable=self.aantal_elek_dames, width=5, command=self.update_prijs).grid(row=1, column=1, pady=5, padx=(0, 40))
+        
+        ttk.Label(grid_fietsen, text="Elektrische Heren:", style='THHSR.TLabel').grid(row=1, column=2, sticky=tk.W, pady=5, padx=(0, 10))
+        self.aantal_elek_heren = tk.IntVar(value=0)
+        ttk.Spinbox(grid_fietsen, from_=0, to=10, textvariable=self.aantal_elek_heren, width=5, command=self.update_prijs).grid(row=1, column=3, pady=5)
+
+        # Sectie: Accessoires & Periode
+        row_opties = ttk.Frame(main_frame, style='Content.TFrame')
+        row_opties.pack(fill=tk.X, pady=(10, 20))
+
+        acc_frame = ttk.Frame(row_opties, style='Content.TFrame')
+        acc_frame.pack(side=tk.LEFT, anchor=tk.N, padx=(0, 50))
+        ttk.Label(acc_frame, text="Accessoires", font=('Source Sans Pro', 14, 'bold'), style='THHSR.TLabel').pack(anchor=tk.W, pady=(0, 5))
+        self.helm_var = tk.BooleanVar()
+        ttk.Checkbutton(acc_frame, text="Helm (€3.00/dg)", variable=self.helm_var, command=self.update_prijs, style='THHSR_Check.TCheckbutton').pack(anchor=tk.W, pady=2)
+        self.kinderzitje_var = tk.BooleanVar()
+        ttk.Checkbutton(acc_frame, text="Kinderzitje (€4.00/dg)", variable=self.kinderzitje_var, command=self.update_prijs, style='THHSR_Check.TCheckbutton').pack(anchor=tk.W, pady=2)
+
+        date_frame = ttk.Frame(row_opties, style='Content.TFrame')
+        date_frame.pack(side=tk.LEFT, anchor=tk.N)
+        ttk.Label(date_frame, text="Huurperiode", font=('Source Sans Pro', 14, 'bold'), style='THHSR.TLabel').pack(anchor=tk.W, pady=(0, 5))
+        
+        self.start_datum = DateEntry(date_frame, width=15, background='#26384A', foreground='white', borderwidth=2, date_pattern='dd-mm-yyyy', mindate=datetime.now())
+        self.start_datum.pack(side=tk.LEFT, padx=(0, 10))
+        self.start_datum.bind("<<DateEntrySelected>>", lambda e: self.update_prijs())
+        
+        self.eind_datum = DateEntry(date_frame, width=15, background='#26384A', foreground='white', borderwidth=2, date_pattern='dd-mm-yyyy', mindate=datetime.now() + timedelta(days=1))
+        self.eind_datum.pack(side=tk.LEFT)
+        self.eind_datum.bind("<<DateEntrySelected>>", lambda e: self.update_prijs())
+
+        self.terugkerend_var = tk.BooleanVar()
+        ttk.Checkbutton(main_frame, text="Terugkerende klant / THHSR Student (10% korting)", variable=self.terugkerend_var, command=self.update_prijs, style='THHSR_Check.TCheckbutton').pack(anchor=tk.W, pady=(10, 15))
+
+        ttk.Label(main_frame, text="Betaalmethode:", font=('Source Sans Pro', 12, 'bold'), style='THHSR.TLabel').pack(anchor=tk.W, pady=(5, 2))
+        pay_frame = ttk.Frame(main_frame, style='Content.TFrame')
+        pay_frame.pack(anchor=tk.W, pady=(0, 30))
+        self.betaalmethode_var = tk.StringVar(value='ideal')
+        ttk.Radiobutton(pay_frame, text="iDEAL (Online)", variable=self.betaalmethode_var, value='ideal', style='THHSR_Radio.TRadiobutton').pack(side=tk.LEFT, padx=(0, 20))
+        ttk.Radiobutton(pay_frame, text="PIN (Bij afhalen)", variable=self.betaalmethode_var, value='pin', style='THHSR_Radio.TRadiobutton').pack(side=tk.LEFT)
+
+        btn_frame = ttk.Frame(main_frame, style='Content.TFrame')
+        btn_frame.pack(anchor=tk.W)
+
+        self.btn_res = tk.Button(btn_frame, text="RESERVEER", command=self.reserveer, font=('Source Sans Pro', 11, 'bold'), bg='#5A7188', fg='#FFFFFF', relief='flat', bd=0, cursor='hand2', padx=20, pady=8)
+        self.btn_res.grid(row=0, column=0, padx=(0, 10))
+        
+        self.btn_reset = tk.Button(btn_frame, text="RESET", command=self.reset_form, font=('Source Sans Pro', 11, 'bold'), bg='#F4F4F4', fg='#26384A', relief='flat', bd=0, cursor='hand2', padx=20, pady=8)
+        self.btn_reset.grid(row=0, column=1, padx=(0, 10))
+        
+        self.btn_list = tk.Button(btn_frame, text="BEKIJK RESERVERINGEN", command=self.toon_reserveringen, font=('Source Sans Pro', 11, 'bold'), bg='#26384A', fg='#FFFFFF', relief='flat', bd=0, cursor='hand2', padx=20, pady=8)
+        self.btn_list.grid(row=0, column=2)
+
+        # ---------------- RECHTERKOLOM: HHS LIMEGROENE SIDEBAR ----------------
+        sidebar_frame = tk.Frame(container, bg="#A3AD00", padx=25, pady=40)
+        sidebar_frame.grid(row=0, column=1, sticky=(tk.N, tk.E, tk.W, tk.S))
+
+        tk.Label(sidebar_frame, text="TOTAALPRIJS", font=('Source Sans Pro', 14, 'bold'), fg='#26384A', bg='#A3AD00').pack(anchor=tk.W, pady=(0, 10))
+        self.prijs_label = tk.Label(sidebar_frame, text="€0.00", font=('Source Sans Pro', 36, 'bold'), fg='#26384A', bg='#A3AD00')
+        self.prijs_label.pack(anchor=tk.W, pady=(0, 20))
+
+        details_box = tk.Frame(sidebar_frame, bg='#FFFFFF', padx=15, pady=15, relief='flat')
+        details_box.pack(fill=tk.X, pady=(0, 20))
+
+        self.prijs_details_label = tk.Label(details_box, text="", font=('Source Sans Pro', 10), fg='#26384A', bg='#FFFFFF', justify=tk.LEFT, anchor='w')
+        self.prijs_details_label.pack(fill=tk.BOTH)
+
+        self.borg_label = tk.Label(sidebar_frame, text="", font=('Source Sans Pro', 11, 'bold'), fg='#26384A', bg='#A3AD00', justify=tk.LEFT)
+        self.borg_label.pack(anchor=tk.W)
+
+        self.dagen_label = tk.Label(sidebar_frame, text="Aantal dagen: 1", font=('Source Sans Pro', 12), fg='#26384A', bg='#A3AD00')
+        self.dagen_label.pack(anchor=tk.W, pady=(20, 0))
+
+        self.update_prijs()
+
+    def bereken_prijs(self):
+        try:
+            start = self.start_datum.get_date()
+            eind = self.eind_datum.get_date()
+            dagen = max(1, (eind - start).days)
+        except:
+            dagen = 1
+
+        self.dagen_label.config(text=f"Aantal huurdagen: {dagen}")
+
+        s_dames = max(0, self.aantal_stad_dames.get())
+        s_heren = max(0, self.aantal_stad_heren.get())
+        e_dames = max(0, self.aantal_elek_dames.get())
+        e_heren = max(0, self.aantal_elek_heren.get())
+
+        totaal_stadsfietsen = Decimal(s_dames + s_heren)
+        totaal_elektrisch = Decimal(e_dames + e_heren)
+        totaal_fietsen = totaal_stadsfietsen + totaal_elektrisch
+
+        prijs_stads = totaal_stadsfietsen * self.prijzen['stadfiets'] * Decimal(dagen)
+        prijs_elek = totaal_elektrisch * self.prijzen['elektrisch'] * Decimal(dagen)
+        verhuur_totaal = prijs_stads + prijs_elek
+
+        details = []
+        if totaal_stadsfietsen > 0:
+            details.append(f"Stadsfietsen: {totaal_stadsfietsen}x\n  ↳ €{prijs_stads:.2f}")
+        if totaal_elektrisch > 0:
+            details.append(f"E-bikes: {totaal_elektrisch}x\n  ↳ €{prijs_elek:.2f}")
+
+        if self.helm_var.get() and totaal_fietsen > 0:
+            verhuur_totaal += self.prijzen['helm'] * Decimal(dagen)
+        if self.kinderzitje_var.get() and totaal_fietsen > 0:
+            verhuur_totaal += self.prijzen['kinderzitje'] * Decimal(dagen)
+
+        if self.terugkerend_var.get() and verhuur_totaal > 0:
+            verhuur_totaal -= verhuur_totaal * Decimal('0.10')
+
+        borg_bedrag = (totaal_stadsfietsen * self.borg['stadfiets']) + (totaal_elektrisch * self.borg['elektrisch'])
+        return verhuur_totaal + borg_bedrag, details, dagen, borg_bedrag, verhuur_totaal, totaal_fietsen
+
+    def update_prijs(self):
+        totaal_met_borg, details, dagen, borg_bedrag, _, _ = self.bereken_prijs()
+        self.prijs_label.config(text=f"€{totaal_met_borg:.2f}")
+        self.prijs_details_label.config(text="\n".join(details) if details else "Geen fietsen geselecteerd.")
+        self.borg_label.config(text=f"Borgsom (Inbegrepen):\n€{borg_bedrag:.2f}")
+
+    def reserveer(self):
+        naam = self.naam_var.get().strip()
+        email = self.email_var.get().strip()
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,7}$'
+
+        if not naam or not email or not re.fullmatch(email_pattern, email):
+            messagebox.showerror("Fout", "Controleer de invoer van naam en e-mailadres.")
+            return
+
+        totaal_met_borg, _, dagen, borg_bedrag, _, totaal_fietsen = self.bereken_prijs()
+        if totaal_fietsen == 0:
+            messagebox.showerror("Fout", "Selecteer minimaal 1 fiets.")
+            return
+
+        reserverings_id = f"RES{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        try:
+            with open(self.csv_bestand, 'a', newline='', encoding='utf-8') as f:
+                csv.writer(f).writerow([
+                    reserverings_id, datetime.now().strftime("%Y-%m-%d %H:%M"), naam, email,
+                    self.aantal_stad_dames.get(), self.aantal_stad_heren.get(),
+                    self.aantal_elek_dames.get(), self.aantal_elek_heren.get(),
+                    'Ja' if self.helm_var.get() else 'Nee', 'Ja' if self.kinderzitje_var.get() else 'Nee',
+                    self.start_datum.get_date().strftime("%d-%m-%Y"), self.eind_datum.get_date().strftime("%d-%m-%Y"),
+                    str(dagen), 'Ja' if self.terugkerend_var.get() else 'Nee',
+                    self.betaalmethode_var.get().upper(), f"{borg_bedrag:.2f}", f"{totaal_met_borg:.2f}", "Actief", "Actief"
+                ])
+            messagebox.showinfo("Succes", f"Reservering opgeslagen onder ID: {reserverings_id}")
+            self.reset_form()
+        except IOError:
+            messagebox.showerror("Fout", "Database schrijf-fout.")
+
+    def reset_form(self):
+        self.naam_var.set('')
+        self.email_var.set('')
+        self.aantal_stad_dames.set(0)
+        self.aantal_stad_heren.set(0)
+        self.aantal_elek_dames.set(0)
+        self.aantal_elek_heren.set(0)
+        self.helm_var.set(False)
+        self.kinderzitje_var.set(False)
+        self.start_datum.set_date(datetime.now())
+        self.eind_datum.set_date(datetime.now() + timedelta(days=1))
+        self.terugkerend_var.set(False)
+        self.update_prijs()
+
+    def toon_reserveringen(self):
+        window = tk.Toplevel(self.root)
+        window.title("Reserveringen Overzicht")
+        window.geometry("1000x400")
+        
+        columns = ('ID', 'Datum', 'Naam', 'Email', 'Start', 'Eind', 'Prijs', 'Status')
+        tree = ttk.Treeview(window, columns=columns, show='headings')
+        for col in columns: tree.heading(col, text=col)
+        tree.pack(fill=tk.BOTH, expand=True)
+
+        try:
+            with open(self.csv_bestand, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                next(reader)
+                for row in reader:
+                    if len(row) >= 19:
+                        tree.insert('', tk.END, values=(row[0], row[1], row[2], row[3], row[10], row[11], row[16], row[18]))
+        except:
+            pass
+
+        def annuleer():
+            selection = tree.selection()
+            if not selection: return
+            item = tree.item(selection[0])
+            values = item['values']
+            
+            startdatum = datetime.strptime(values[4], "%d-%m-%Y")
+            if (startdatum - datetime.now()).total_seconds() / 3600 < 24:
+                messagebox.showerror("Geweigerd", "Annuleren kan tot 24 uur voor aanvang.")
+                return
+
+            with open(self.csv_bestand, 'r', encoding='utf-8') as f: rows = list(csv.reader(f))
+            for r in rows:
+                if r[0] == values[0]: r[18] = 'Geannuleerd'
+            with open(self.csv_bestand, 'w', newline='', encoding='utf-8') as f: csv.writer(f).writerows(rows)
+            window.destroy()
+            self.toon_reserveringen()
+
+        tk.Button(window, text="Annuleer Selectie (Minstens 24u vooraf)", command=annuleer, bg='#5A7188', fg='white', relief='flat').pack(pady=10)
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    LoginWindow(root)
+    root.mainloop()
