@@ -12,7 +12,7 @@ Doel van deze applicatie:
 - Applicatie berekent prijs, borg en korting.
 - Reservering wordt opgeslagen in een CSV-bestand.
 - Reserveringen kunnen bekeken en geannuleerd worden.
--Versie 8
+-Versie 5
 """
 
 import csv
