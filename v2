@@ -1,4 +1,4 @@
-# (In deze stap is de basislogica uitgebreid naar de volledige business rules)
+Wat is er allemaal veranderd?
 # De code bevat nu de methodes: bereken_prijs(), update_prijs() en toon_reserveringen()
 # inclusief de 'annuleer_reservering()' functie met de datetime-vergelijking voor de 24-uurs limiet.
 ``` *(Zie volledige code in Versie 4 voor de exacte uitwerking van deze functies binnen de klassen)*
@@ -6,7 +6,6 @@
 ---
 
 ### Versie 3: Implementatie van de HHS-Huisstijl (UI/UX)
-* **GitHub Commit Bericht:** `style: transform UI layout to professional HHS corporate identity`
 * **Wat is er nieuw / gewijzigd:** * Losse inline widget-styling is verwijderd en ondergebracht in een centrale `setup_styles()` methode met `ttk.Style()`.
     * De layout is omgebouwd naar een asymmetrisch ontwerp: een strak, modern wit contentblok links (`#FFFFFF`) en een grote, opvallende Haagse limegroene sidebar rechts (`#A3AD00`) waarin de prijs en de gecumuleerde borgsom gecentreerd getoond worden.
     * Typografische hiërarchie toegevoegd (`Source Sans Pro`) met extra grote focus op het eindbedrag.
@@ -14,19 +13,18 @@
 ---
 
 ### Versie 4: Toevoeging van de Login-Authenticatielaag (Definitieve Code)
-* **GitHub Commit Bericht:** `feat: integrated employee login gate and finalized application lifecycle`
 * **Wat is er nieuw / gewijzigd:** * Om te voldoen aan de functionele eisen (en de peerfeedback van Cüneyt omtrent overzichtelijkheid) is er een splitsing van klassen (OOP) doorgevoerd.
     * Een `LoginWindow` klasse toegevoegd die de medewerker om authenticatie vraagt (`admin` / `biker2026`) alvorens de `BikerRentalApp` wordt geïnitieerd en het hoofdvenster opent.
 
-**Dit is de volledige, definitieve code die hoort bij je laatste commit:**
+
 
 ```python
-"""
+
 Onderdeel: Biker Haaglanden - Fietsverhuur Applicatie
 Ontwikkeld in opdracht van: De Haagse Hogeschool
 Huisstijl-architectuur: Modern, minimalistisch, asymmetrisch met veel negatieve ruimte.
 Ondersteunt: Meerdere fietstypen, dynamische prijsberekening en medewerkersportaal.
-"""
+
 
 import os
 import re
