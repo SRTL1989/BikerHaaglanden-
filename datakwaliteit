@@ -1,0 +1,103 @@
+import io
+from pathlib import Path
+import pandas as pd
+import streamlit as st
+
+# --- PAGINA CONFIGURATIE ---
+st.set_page_config(
+    page_title="Datakwaliteit Monitor",
+    page_icon="✓",
+    layout="wide",
+)
+
+# Initialiseer de session_state variabelen (het geheugen van de app)
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "source_dataframe" not in st.session_state:
+    st.session_state.source_dataframe = None
+
+
+# --- HELPER FUNCTIE: BESTAND INLEZEN ---
+@st.cache_data
+def read_uploaded_file(file_name: str, file_bytes: bytes) -> pd.DataFrame:
+    suffix = Path(file_name).suffix.lower()
+    if suffix == ".csv":
+        return pd.read_csv(io.BytesIO(file_bytes), sep=None, engine="python")
+    if suffix in {".xlsx", ".xls"}:
+        return pd.read_excel(io.BytesIO(file_bytes))
+    raise ValueError("Niet-ondersteund bestandstype.")
+
+
+# --- SCHERM 1: INLOGSCHERM ---
+def login_scherm():
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.write("")
+        st.title("🔒 Datakwaliteit Monitor")
+        st.subheader("Inloggen")
+
+        with st.form("login_form"):
+            username = st.text_input("Gebruikersnaam", value="admin")
+            password = st.text_input("Wachtwoord", type="password", value="admin123")
+            submit_button = st.form_submit_button("Inloggen", type="primary", use_container_width=True)
+
+            if submit_button:
+                if username == "admin" and password == "admin123":
+                    st.session_state.logged_in = True
+                    st.success("Succesvol ingelogd!")
+                    st.rerun()
+                else:
+                    st.error("Onjuiste gebruikersnaam of wachtwoord.")
+
+
+# --- SCHERM 2: HOODSCHERM (DATA LADEN) ---
+def hoofdscherm_data_laden():
+    st.title("📥 Stap 1: Bestand laden & Controleren")
+    st.caption("Upload een CSV- of Excelbestand om de datakwaliteitscontrole te starten.")
+
+    # 1. De File Uploader
+    uploaded_file = st.file_uploader("Kies een CSV- of Excelbestand", type=["csv", "xlsx", "xls"])
+
+    if uploaded_file is not None:
+        try:
+            # Lees het bestand in met onze helper functie
+            dataframe = read_uploaded_file(uploaded_file.name, uploaded_file.getvalue())
+            st.session_state.source_dataframe = dataframe
+
+            st.success(f"Bestand '{uploaded_file.name}' succesvol geladen!")
+
+            # 2. Toon een voorbeeld van de data
+            st.subheader("Voorbeeld van de geladen data (Eerste 10 rijen)")
+            st.dataframe(dataframe.head(10), use_container_width=True)
+
+            st.markdown("---")
+
+            # 3. De grote knop om de controle te starten
+            st.subheader("Start de Kwaliteitscontrole")
+            st.write("Klik op de onderstaande knop om de data te analyseren op fouten.")
+
+            if st.button("Voer datakwaliteitscontrole uit", type="primary", use_container_width=True):
+                st.info("De controle wordt uitgevoerd... In de volgende stap koppelen we hier het errorlogboek aan!")
+
+        except Exception as exc:
+            st.error(f"Het bestand kon niet worden ingelezen: {exc}")
+
+    else:
+        st.info("Sleep een bestand hiernaartoe of klik om te uploaden.")
+
+
+# --- SCHERM-SCHAKELAAR (ROUTING) ---
+if not st.session_state.logged_in:
+    login_scherm()
+else:
+    # Voeg een uitlogknop toe aan de zijkant (sidebar)
+    with st.sidebar:
+        st.title("Menu")
+        st.write("Status: Ingelogd as Admin")
+        if st.button("Uitloggen", use_container_width=True):
+            st.session_state.logged_in = False
+            st.session_state.source_dataframe = None
+            st.rerun()
+
+    # Toon het hoofdscherm
+    hoofdscherm_data_laden()
