@@ -1,0 +1,555 @@
+import io
+from pathlib import Path
+
+import pandas as pd
+import streamlit as st
+
+
+
+
+# ---------------------------------------------------------
+# PAGINACONFIGURATIE
+# ---------------------------------------------------------
+
+st.set_page_config(
+    page_title="Datakwaliteit Monitor — ETL",
+    page_icon="📥",
+    layout="wide",
+)
+
+
+# ---------------------------------------------------------
+# SESSION STATE
+# ---------------------------------------------------------
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if "source_dataframe" not in st.session_state:
+    st.session_state.source_dataframe = None
+
+if "validation_results" not in st.session_state:
+    st.session_state.validation_results = None
+
+if "uploaded_file_name" not in st.session_state:
+    st.session_state.uploaded_file_name = None
+
+
+# ---------------------------------------------------------
+# VERWACHTE KOLOMMEN
+# ---------------------------------------------------------
+
+EXPECTED_COLUMNS = [
+    "Organisatie",
+    "Organisatie_Naam",
+    "Formatieplaats",
+    "Functienaam",
+    "Fulltime equivalent",
+    "Vakkennis",
+    "Medewerker",
+    "Datum in dienst",
+    "Geboortedatum",
+    "Geslacht",
+    "Contractsoort",
+    "Arbeidsduur",
+    "Kalendermaand/jaar",
+    "Test",
+]
+
+
+# ---------------------------------------------------------
+# BESTAND INLEZEN
+# ---------------------------------------------------------
+
+@st.cache_data(show_spinner=False)
+def read_and_validate_structure(
+    file_name: str,
+    file_bytes: bytes,
+) -> pd.DataFrame:
+    """
+    Leest een CSV- of Excelbestand in.
+
+    De kolomnamen worden opgeschoond, maar niet automatisch hernoemd.
+    Hierdoor kan de applicatie daadwerkelijk controleren of de
+    aangeleverde kolommen correct zijn.
+    """
+
+    suffix = Path(file_name).suffix.lower()
+
+    if suffix == ".csv":
+        dataframe = pd.read_csv(
+            io.BytesIO(file_bytes),
+            sep=None,
+            engine="python",
+        )
+
+    elif suffix in {".xlsx", ".xls"}:
+        dataframe = pd.read_excel(
+            io.BytesIO(file_bytes)
+        )
+
+    else:
+        raise ValueError(
+            "Onjuist formaat. Lever een CSV- of Excelbestand aan."
+        )
+
+    dataframe.columns = [
+        str(column).strip()
+        for column in dataframe.columns
+    ]
+
+    return dataframe
+
+
+# ---------------------------------------------------------
+# STRUCTUURCONTROLE
+# ---------------------------------------------------------
+
+def controleer_structuur(dataframe: pd.DataFrame) -> dict:
+    """
+    Vergelijkt de kolommen van het bestand met de verwachte kolommen.
+    """
+
+    werkelijke_kolommen = list(dataframe.columns)
+
+    ontbrekende_kolommen = [
+        column
+        for column in EXPECTED_COLUMNS
+        if column not in werkelijke_kolommen
+    ]
+
+    extra_kolommen = [
+        column
+        for column in werkelijke_kolommen
+        if column not in EXPECTED_COLUMNS
+    ]
+
+    juiste_volgorde = werkelijke_kolommen == EXPECTED_COLUMNS
+
+    structuur_correct = (
+        not ontbrekende_kolommen
+        and not extra_kolommen
+        and juiste_volgorde
+    )
+
+    return {
+        "structuur_correct": structuur_correct,
+        "ontbrekende_kolommen": ontbrekende_kolommen,
+        "extra_kolommen": extra_kolommen,
+        "juiste_volgorde": juiste_volgorde,
+    }
+
+
+def toon_structuurcontrole(structuur_resultaat: dict) -> None:
+    """
+    Toont de resultaten van de structuurcontrole.
+    """
+
+    if structuur_resultaat["structuur_correct"]:
+        st.success(
+            "✅ Structuurcontrole geslaagd. Alle verwachte kolommen "
+            "zijn aanwezig en staan in de juiste volgorde."
+        )
+        return
+
+    st.warning(
+        "⚠️ De structuur van het bestand wijkt af van de verwachte structuur."
+    )
+
+    if structuur_resultaat["ontbrekende_kolommen"]:
+        st.error(
+            "Ontbrekende kolommen: "
+            + ", ".join(
+                structuur_resultaat["ontbrekende_kolommen"]
+            )
+        )
+
+    if structuur_resultaat["extra_kolommen"]:
+        st.warning(
+            "Onverwachte extra kolommen: "
+            + ", ".join(
+                structuur_resultaat["extra_kolommen"]
+            )
+        )
+
+    if not structuur_resultaat["juiste_volgorde"]:
+        st.info(
+            "De kolommen staan niet in de voorgeschreven volgorde."
+        )
+
+
+# ---------------------------------------------------------
+# RESULTATEN KWALITEITSCONTROLE
+# ---------------------------------------------------------
+
+def toon_validatieresultaten() -> None:
+    """
+    Toont de resultaten direct op het hoofdscherm.
+    """
+
+    resultaten = st.session_state.validation_results
+
+    if resultaten is None:
+        return
+
+    st.divider()
+
+    st.header("📊 Resultaten kwaliteitscontrole")
+
+    errors_df = resultaten["errors"]
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric(
+        "Kwaliteitsscore",
+        f"{resultaten['score']}%",
+    )
+
+    col2.metric(
+        "Totaal gecontroleerd",
+        f"{resultaten['total_records']} rijen",
+    )
+
+    col3.metric(
+        "Totaal aantal fouten",
+        len(errors_df),
+    )
+
+    col4.metric(
+        "Rijen met fouten",
+        resultaten["records_with_errors"],
+    )
+
+    if resultaten["score"] < 100:
+        st.error(
+            "🚨 ETL-status: GEBLOKKEERD. Het bestand bevat "
+            "datakwaliteitsfouten en kan nog niet worden verwerkt."
+        )
+    else:
+        st.success(
+            "✅ ETL-status: SUCCESVOL. Het bestand voldoet aan "
+            "alle ingestelde datakwaliteitseisen."
+        )
+
+    tab1, tab2 = st.tabs(
+        [
+            "❌ Gedetailleerd foutenlogboek",
+            "📄 Volledige brondata",
+        ]
+    )
+
+    with tab1:
+        st.subheader("Gedetailleerd foutenlogboek")
+
+        if errors_df.empty:
+            st.success(
+                "Er zijn geen inhoudelijke fouten aangetroffen."
+            )
+
+        else:
+            st.dataframe(
+                errors_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            csv_data = errors_df.to_csv(
+                index=False
+            ).encode("utf-8-sig")
+
+            st.download_button(
+                label="Download foutenlogboek als CSV",
+                data=csv_data,
+                file_name="etl_foutenlogboek.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+    with tab2:
+        st.subheader("Volledige ingeladen brondata")
+
+        st.dataframe(
+            st.session_state.source_dataframe,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+# ---------------------------------------------------------
+# INLOGSCHERM
+# ---------------------------------------------------------
+
+def login_scherm() -> None:
+    """
+    Toont het inlogscherm.
+    """
+
+    col1, col2, col3 = st.columns([1, 2, 1])
+
+    with col2:
+        st.write("")
+        st.write("")
+
+        st.title("🔒 ETL Data Portaal")
+
+        st.subheader(
+            "Laadproces: [030] Personeelnummers"
+        )
+
+        with st.form("login_form"):
+            username = st.text_input(
+                "Gebruikersnaam",
+                value="admin",
+            )
+
+            password = st.text_input(
+                "Wachtwoord",
+                type="password",
+                value="admin123",
+            )
+
+            login_button = st.form_submit_button(
+                "Inloggen",
+                type="primary",
+                use_container_width=True,
+            )
+
+        if login_button:
+            if username == "admin" and password == "admin123":
+                st.session_state.logged_in = True
+                st.rerun()
+
+            else:
+                st.error(
+                    "Onjuiste inloggegevens."
+                )
+
+
+# ---------------------------------------------------------
+# HOOFDSCHERM
+# ---------------------------------------------------------
+
+def hoofdscherm_etl_laden() -> None:
+    """
+    Hoofdscherm voor upload, structuurcontrole en kwaliteitscontrole.
+    """
+
+    st.title("📥 Data laden en controleren")
+
+    st.caption(
+        "Laadproces EPT_030_PERS_PERSONEELNRS — HRO Data Input"
+    )
+
+    with st.expander(
+        "Verwachte bestandsstructuur bekijken"
+    ):
+        structuur_df = pd.DataFrame(
+            {
+                "Positie": range(
+                    1,
+                    len(EXPECTED_COLUMNS) + 1,
+                ),
+                "Kolomnaam": EXPECTED_COLUMNS,
+            }
+        )
+
+        st.dataframe(
+            structuur_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    uploaded_file = st.file_uploader(
+        "Kies het HRO-personeelsbestand",
+        type=["csv", "xlsx", "xls"],
+    )
+
+    if uploaded_file is not None:
+        try:
+            dataframe = read_and_validate_structure(
+                uploaded_file.name,
+                uploaded_file.getvalue(),
+            )
+
+            # Alleen resetten wanneer een ander bestand wordt geüpload.
+            if (
+                st.session_state.uploaded_file_name
+                != uploaded_file.name
+            ):
+                st.session_state.validation_results = None
+
+            st.session_state.uploaded_file_name = uploaded_file.name
+            st.session_state.source_dataframe = dataframe
+
+            st.subheader("Bestandsinformatie")
+
+            info_col1, info_col2, info_col3 = st.columns(3)
+
+            info_col1.metric(
+                "Aantal rijen",
+                len(dataframe),
+            )
+
+            info_col2.metric(
+                "Aantal kolommen",
+                len(dataframe.columns),
+            )
+
+            info_col3.metric(
+                "Bestandsnaam",
+                uploaded_file.name,
+            )
+
+            st.subheader("Structuurcontrole")
+
+            structuur_resultaat = controleer_structuur(
+                dataframe
+            )
+
+            toon_structuurcontrole(
+                structuur_resultaat
+            )
+
+            st.subheader("Voorbeeld brondata")
+
+            st.dataframe(
+                dataframe.head(10),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.divider()
+
+            if structuur_resultaat["structuur_correct"]:
+                if st.button(
+                    "Start inhoudelijke kwaliteitscontrole",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    with st.spinner(
+                        "Datakwaliteitsregels worden uitgevoerd..."
+                    ):
+                        validator = DataQualityValidator(
+                            dataframe
+                        )
+
+                        st.session_state.validation_results = (
+                            validator.check_data_quality()
+                        )
+
+                    st.rerun()
+
+            else:
+                st.error(
+                    "De inhoudelijke kwaliteitscontrole kan niet worden "
+                    "gestart totdat de bestandsstructuur correct is."
+                )
+
+            toon_validatieresultaten()
+
+        except UnicodeDecodeError:
+            st.error(
+                "Het CSV-bestand kon niet worden gelezen. "
+                "Controleer de tekencodering."
+            )
+
+        except pd.errors.EmptyDataError:
+            st.error(
+                "Het aangeleverde bestand bevat geen gegevens."
+            )
+
+        except Exception as exc:
+            st.error(
+                f"Fout bij verwerken van het bestand: {exc}"
+            )
+
+    else:
+        st.info(
+            "Upload een CSV- of Excelbestand om de controle te starten."
+        )
+
+
+# ---------------------------------------------------------
+# SIDEBAR
+# ---------------------------------------------------------
+
+def toon_sidebar() -> None:
+    """
+    Toont informatie en de uitlogknop in de sidebar.
+    """
+
+    with st.sidebar:
+        st.title("ETL Data Portaal")
+
+        st.caption(
+            "Datakwaliteit Monitor"
+        )
+
+        st.divider()
+
+        st.markdown(
+            "**Actief laadproces**"
+        )
+
+        st.write(
+            "EPT_030_PERS_PERSONEELNRS"
+        )
+
+        st.divider()
+
+        if st.session_state.source_dataframe is not None:
+            st.success(
+                "Bronbestand is ingeladen."
+            )
+        else:
+            st.info(
+                "Nog geen bronbestand ingeladen."
+            )
+
+        if st.session_state.validation_results is not None:
+            st.success(
+                "Kwaliteitscontrole is uitgevoerd."
+            )
+
+        st.divider()
+
+        if st.button(
+            "Nieuw bestand controleren",
+            use_container_width=True,
+        ):
+            st.session_state.source_dataframe = None
+            st.session_state.validation_results = None
+            st.session_state.uploaded_file_name = None
+            st.cache_data.clear()
+            st.rerun()
+
+        if st.button(
+            "Uitloggen",
+            use_container_width=True,
+        ):
+            st.session_state.logged_in = False
+            st.session_state.source_dataframe = None
+            st.session_state.validation_results = None
+            st.session_state.uploaded_file_name = None
+            st.rerun()
+
+
+# ---------------------------------------------------------
+# APPLICATIE STARTEN
+# ---------------------------------------------------------
+
+def main() -> None:
+    """
+    Start de Streamlit-applicatie.
+    """
+
+    if not st.session_state.logged_in:
+        login_scherm()
+        return
+
+    toon_sidebar()
+    hoofdscherm_etl_laden()
+
+
+if __name__ == "__main__":
+    main()
