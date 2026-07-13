@@ -1,0 +1,1808 @@
+import tkinter as tk
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
+
+import pandas as pd
+
+
+# =========================================================
+# RSO / RIJKSOVERHEID-ACHTIGE HUISSTIJL
+# =========================================================
+
+RIJKS_BLAUW = "#01689B"
+RIJKS_DONKERBLAUW = "#154273"
+RIJKS_LICHTBLAUW = "#E5F1F9"
+RIJKS_GEEL = "#F9E11E"
+ACHTERGROND = "#F3F5F6"
+WIT = "#FFFFFF"
+TEKST = "#1B1B1B"
+SUBTEKST = "#535353"
+RAND = "#D1D5D8"
+SUCCES = "#39870C"
+SUCCES_LICHT = "#EAF4E5"
+FOUT = "#D52B1E"
+FOUT_LICHT = "#FCE9E7"
+WAARSCHUWING_LICHT = "#FFF7CC"
+
+
+# =========================================================
+# VERWACHTE BESTANDSSTRUCTUUR
+# =========================================================
+
+EXPECTED_COLUMNS = [
+    "Organisatie",
+    "Organisatie_Naam",
+    "Formatieplaats",
+    "Functienaam",
+    "Fulltime equivalent",
+    "Vakkennis",
+    "Medewerker",
+    "Datum in dienst",
+    "Geboortedatum",
+    "Geslacht",
+    "Contractsoort",
+    "Arbeidsduur",
+    "Kalendermaand/jaar",
+    "Test",
+]
+
+MANDATORY_COLUMNS = [
+    "Organisatie",
+    "Organisatie_Naam",
+    "Formatieplaats",
+    "Functienaam",
+    "Fulltime equivalent",
+    "Medewerker",
+    "Datum in dienst",
+    "Geboortedatum",
+    "Geslacht",
+    "Contractsoort",
+    "Arbeidsduur",
+    "Kalendermaand/jaar",
+]
+
+
+# =========================================================
+# DATAKWALITEITSFUNCTIES
+# =========================================================
+
+def is_empty(value) -> bool:
+    if pd.isna(value):
+        return True
+    return isinstance(value, str) and value.strip() == ""
+
+
+def convert_to_number(value):
+    if is_empty(value):
+        return None
+
+    try:
+        return float(str(value).strip().replace(",", "."))
+    except (ValueError, TypeError):
+        return None
+
+
+def add_error(
+    errors: list,
+    row_number,
+    column: str,
+    value,
+    error_type: str,
+    description: str,
+) -> None:
+    errors.append(
+        {
+            "Rijnummer": row_number,
+            "Kolom": column,
+            "Waarde": "" if pd.isna(value) else str(value),
+            "Fouttype": error_type,
+            "Omschrijving": description,
+        }
+    )
+
+
+def controleer_datakwaliteit(dataframe: pd.DataFrame) -> dict:
+    errors = []
+
+    # Verplichte waarden
+    for column in MANDATORY_COLUMNS:
+        if column not in dataframe.columns:
+            continue
+
+        for index, value in dataframe[column].items():
+            if is_empty(value):
+                add_error(
+                    errors,
+                    index + 2,
+                    column,
+                    value,
+                    "Lege waarde",
+                    f"Het verplichte veld '{column}' mag niet leeg zijn.",
+                )
+
+    # FTE
+    fte_column = "Fulltime equivalent"
+    if fte_column in dataframe.columns:
+        for index, value in dataframe[fte_column].items():
+            if is_empty(value):
+                continue
+
+            number = convert_to_number(value)
+
+            if number is None:
+                add_error(
+                    errors,
+                    index + 2,
+                    fte_column,
+                    value,
+                    "Ongeldig getal",
+                    "De FTE moet een geldig getal zijn.",
+                )
+            elif number < 0 or number > 1:
+                add_error(
+                    errors,
+                    index + 2,
+                    fte_column,
+                    value,
+                    "Ongeldige FTE",
+                    "De FTE moet tussen 0 en 1 liggen.",
+                )
+
+    # Arbeidsduur
+    working_hours_column = "Arbeidsduur"
+    if working_hours_column in dataframe.columns:
+        for index, value in dataframe[working_hours_column].items():
+            if is_empty(value):
+                continue
+
+            number = convert_to_number(value)
+
+            if number is None:
+                add_error(
+                    errors,
+                    index + 2,
+                    working_hours_column,
+                    value,
+                    "Ongeldig getal",
+                    "De arbeidsduur moet een geldig getal zijn.",
+                )
+            elif number <= 0 or number > 60:
+                add_error(
+                    errors,
+                    index + 2,
+                    working_hours_column,
+                    value,
+                    "Ongeldige arbeidsduur",
+                    "De arbeidsduur moet groter zijn dan 0 en maximaal 60 uur zijn.",
+                )
+
+    # Datums
+    today = pd.Timestamp.today().normalize()
+
+    for column in ["Datum in dienst", "Geboortedatum"]:
+        if column not in dataframe.columns:
+            continue
+
+        for index, value in dataframe[column].items():
+            if is_empty(value):
+                continue
+
+            parsed_date = pd.to_datetime(
+                value,
+                errors="coerce",
+                dayfirst=True,
+            )
+
+            if pd.isna(parsed_date):
+                add_error(
+                    errors,
+                    index + 2,
+                    column,
+                    value,
+                    "Ongeldige datum",
+                    f"De waarde in '{column}' is geen geldige datum.",
+                )
+            elif parsed_date.normalize() > today:
+                add_error(
+                    errors,
+                    index + 2,
+                    column,
+                    value,
+                    "Datum in de toekomst",
+                    f"De waarde in '{column}' mag niet in de toekomst liggen.",
+                )
+
+    # Datum in dienst versus geboortedatum
+    if {"Datum in dienst", "Geboortedatum"}.issubset(dataframe.columns):
+        for index, row in dataframe.iterrows():
+            employment_date = pd.to_datetime(
+                row["Datum in dienst"],
+                errors="coerce",
+                dayfirst=True,
+            )
+
+            birth_date = pd.to_datetime(
+                row["Geboortedatum"],
+                errors="coerce",
+                dayfirst=True,
+            )
+
+            if pd.isna(employment_date) or pd.isna(birth_date):
+                continue
+
+            if employment_date <= birth_date:
+                add_error(
+                    errors,
+                    index + 2,
+                    "Datum in dienst",
+                    row["Datum in dienst"],
+                    "Onlogische datumvolgorde",
+                    "Datum in dienst moet na de geboortedatum liggen.",
+                )
+
+    # Dubbele medewerkers per maand
+    if {"Medewerker", "Kalendermaand/jaar"}.issubset(dataframe.columns):
+        duplicate_mask = dataframe.duplicated(
+            subset=["Medewerker", "Kalendermaand/jaar"],
+            keep=False,
+        )
+
+        for index, row in dataframe[duplicate_mask].iterrows():
+            add_error(
+                errors,
+                index + 2,
+                "Medewerker",
+                row["Medewerker"],
+                "Dubbele registratie",
+                (
+                    "Deze medewerker komt meerdere keren voor "
+                    "binnen dezelfde kalendermaand."
+                ),
+            )
+
+    errors_dataframe = pd.DataFrame(
+        errors,
+        columns=[
+            "Rijnummer",
+            "Kolom",
+            "Waarde",
+            "Fouttype",
+            "Omschrijving",
+        ],
+    )
+
+    rows_with_errors = {
+        error["Rijnummer"]
+        for error in errors
+        if isinstance(error["Rijnummer"], int)
+    }
+
+    total_records = len(dataframe)
+    records_with_errors = len(rows_with_errors)
+
+    if total_records > 0:
+        score = round(
+            ((total_records - records_with_errors) / total_records) * 100,
+            2,
+        )
+    else:
+        score = 0.0
+
+    return {
+        "score": score,
+        "total_records": total_records,
+        "total_errors": len(errors_dataframe),
+        "records_with_errors": records_with_errors,
+        "errors": errors_dataframe,
+        "passed": len(errors_dataframe) == 0,
+    }
+
+
+# =========================================================
+# TKINTER-APPLICATIE
+# =========================================================
+
+class RSODataQualityApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+
+        self.title("RSO Datakwaliteit Monitor")
+        self.geometry("1450x860")
+        self.minsize(1120, 720)
+        self.configure(bg=ACHTERGROND)
+
+        self.source_dataframe = None
+        self.validation_results = None
+        self.selected_file_path = None
+
+        self.setup_styles()
+        self.show_login_screen()
+
+    # -----------------------------------------------------
+    # STIJLEN
+    # -----------------------------------------------------
+
+    def setup_styles(self):
+        style = ttk.Style(self)
+
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        style.configure(
+            "RSO.TButton",
+            font=("Segoe UI", 10, "bold"),
+            foreground=WIT,
+            background=RIJKS_BLAUW,
+            borderwidth=0,
+            padding=(16, 10),
+        )
+        style.map(
+            "RSO.TButton",
+            background=[
+                ("active", RIJKS_DONKERBLAUW),
+                ("disabled", "#A9C7D8"),
+            ],
+            foreground=[
+                ("disabled", WIT),
+            ],
+        )
+
+        style.configure(
+            "Secondary.TButton",
+            font=("Segoe UI", 10),
+            foreground=RIJKS_DONKERBLAUW,
+            background=WIT,
+            borderwidth=1,
+            padding=(14, 9),
+        )
+        style.map(
+            "Secondary.TButton",
+            background=[("active", RIJKS_LICHTBLAUW)],
+        )
+
+        style.configure(
+            "Danger.TButton",
+            font=("Segoe UI", 10),
+            foreground=FOUT,
+            background=WIT,
+            padding=(14, 9),
+        )
+        style.map(
+            "Danger.TButton",
+            background=[("active", FOUT_LICHT)],
+        )
+
+        style.configure(
+            "Treeview",
+            background=WIT,
+            fieldbackground=WIT,
+            foreground=TEKST,
+            rowheight=29,
+            font=("Segoe UI", 9),
+            bordercolor=RAND,
+        )
+
+        style.configure(
+            "Treeview.Heading",
+            background=RIJKS_LICHTBLAUW,
+            foreground=RIJKS_DONKERBLAUW,
+            font=("Segoe UI", 9, "bold"),
+            padding=8,
+        )
+
+        style.map(
+            "Treeview.Heading",
+            background=[("active", "#D7EAF5")],
+        )
+
+        style.configure(
+            "TNotebook",
+            background=ACHTERGROND,
+            borderwidth=0,
+        )
+
+        style.configure(
+            "TNotebook.Tab",
+            font=("Segoe UI", 10, "bold"),
+            padding=(18, 10),
+            background="#E6E9EB",
+            foreground=SUBTEKST,
+        )
+
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", WIT)],
+            foreground=[("selected", RIJKS_DONKERBLAUW)],
+        )
+
+        style.configure(
+            "RSO.TEntry",
+            padding=8,
+        )
+
+    # -----------------------------------------------------
+    # BASIS
+    # -----------------------------------------------------
+
+    def clear_window(self):
+        for widget in self.winfo_children():
+            widget.destroy()
+
+    def create_separator(self, parent, pady=15):
+        tk.Frame(
+            parent,
+            bg=RAND,
+            height=1,
+        ).pack(
+            fill="x",
+            pady=pady,
+        )
+
+    def create_metric_card(self, parent, title, value, column):
+        card = tk.Frame(
+            parent,
+            bg=WIT,
+            highlightbackground=RAND,
+            highlightthickness=1,
+            padx=18,
+            pady=15,
+        )
+
+        card.grid(
+            row=0,
+            column=column,
+            padx=6,
+            sticky="nsew",
+        )
+
+        tk.Label(
+            card,
+            text=title,
+            font=("Segoe UI", 9),
+            bg=WIT,
+            fg=SUBTEKST,
+        ).pack(anchor="w")
+
+        tk.Label(
+            card,
+            text=value,
+            font=("Segoe UI", 20, "bold"),
+            bg=WIT,
+            fg=RIJKS_DONKERBLAUW,
+        ).pack(anchor="w", pady=(6, 0))
+
+        parent.grid_columnconfigure(column, weight=1)
+
+    # -----------------------------------------------------
+    # INLOGSCHERM
+    # -----------------------------------------------------
+
+    def show_login_screen(self):
+        self.clear_window()
+
+        root_frame = tk.Frame(self, bg=ACHTERGROND)
+        root_frame.pack(fill="both", expand=True)
+
+        # Blauwe bovenbalk
+        top_bar = tk.Frame(
+            root_frame,
+            bg=RIJKS_DONKERBLAUW,
+            height=110,
+        )
+        top_bar.pack(fill="x")
+        top_bar.pack_propagate(False)
+
+        tk.Label(
+            top_bar,
+            text="Rijksschoonmaakorganisatie",
+            font=("Segoe UI", 17, "bold"),
+            bg=RIJKS_DONKERBLAUW,
+            fg=WIT,
+        ).pack(
+            anchor="w",
+            padx=45,
+            pady=(24, 2),
+        )
+
+        tk.Label(
+            top_bar,
+            text="Datakwaliteit Monitor",
+            font=("Segoe UI", 11),
+            bg=RIJKS_DONKERBLAUW,
+            fg="#D8E8F2",
+        ).pack(
+            anchor="w",
+            padx=45,
+        )
+
+        login_card = tk.Frame(
+            root_frame,
+            bg=WIT,
+            highlightbackground=RAND,
+            highlightthickness=1,
+            padx=42,
+            pady=36,
+        )
+
+        login_card.place(
+            relx=0.5,
+            rely=0.56,
+            anchor="center",
+            width=500,
+        )
+
+        # Gele accentlijn
+        tk.Frame(
+            login_card,
+            bg=RIJKS_GEEL,
+            height=7,
+        ).pack(fill="x", pady=(0, 24))
+
+        tk.Label(
+            login_card,
+            text="Inloggen",
+            font=("Segoe UI", 24, "bold"),
+            bg=WIT,
+            fg=RIJKS_DONKERBLAUW,
+        ).pack(anchor="w")
+
+        tk.Label(
+            login_card,
+            text="Laadproces EPT_030_PERS_PERSONEELNRS",
+            font=("Segoe UI", 10),
+            bg=WIT,
+            fg=SUBTEKST,
+        ).pack(anchor="w", pady=(4, 26))
+
+        tk.Label(
+            login_card,
+            text="Gebruikersnaam",
+            font=("Segoe UI", 10, "bold"),
+            bg=WIT,
+            fg=TEKST,
+        ).pack(anchor="w")
+
+        self.username_entry = ttk.Entry(
+            login_card,
+            style="RSO.TEntry",
+            font=("Segoe UI", 11),
+        )
+        self.username_entry.pack(fill="x", pady=(6, 18), ipady=4)
+        self.username_entry.insert(0, "admin")
+
+        tk.Label(
+            login_card,
+            text="Wachtwoord",
+            font=("Segoe UI", 10, "bold"),
+            bg=WIT,
+            fg=TEKST,
+        ).pack(anchor="w")
+
+        self.password_entry = ttk.Entry(
+            login_card,
+            style="RSO.TEntry",
+            font=("Segoe UI", 11),
+            show="*",
+        )
+        self.password_entry.pack(fill="x", pady=(6, 24), ipady=4)
+        self.password_entry.insert(0, "admin123")
+
+        ttk.Button(
+            login_card,
+            text="Inloggen",
+            style="RSO.TButton",
+            command=self.login,
+        ).pack(fill="x")
+
+        self.password_entry.bind(
+            "<Return>",
+            lambda event: self.login(),
+        )
+
+    def login(self):
+        username = self.username_entry.get().strip()
+        password = self.password_entry.get()
+
+        if username == "admin" and password == "admin123":
+            self.show_information_screen()
+        else:
+            messagebox.showerror(
+                "Inloggen mislukt",
+                "Onjuiste gebruikersnaam of onjuist wachtwoord.",
+            )
+
+    # -----------------------------------------------------
+    # INFORMATIESCHERM
+    # -----------------------------------------------------
+
+    def show_information_screen(self):
+        """
+        Toont na het inloggen eerst uitleg over het doel en gebruik
+        van de datakwaliteitsmonitor.
+        """
+        self.clear_window()
+
+        # Header
+        header = tk.Frame(
+            self,
+            bg=RIJKS_DONKERBLAUW,
+            height=88,
+        )
+        header.pack(fill="x")
+        header.pack_propagate(False)
+
+        tk.Label(
+            header,
+            text="Rijksschoonmaakorganisatie",
+            font=("Segoe UI", 16, "bold"),
+            bg=RIJKS_DONKERBLAUW,
+            fg=WIT,
+        ).pack(side="left", padx=28)
+
+        tk.Label(
+            header,
+            text="ETL Data Portaal",
+            font=("Segoe UI", 12),
+            bg=RIJKS_DONKERBLAUW,
+            fg="#D8E8F2",
+        ).pack(side="left")
+
+        # Vaste actiebalk onderaan. Deze blijft altijd zichtbaar,
+        # ook wanneer de uitleg langer is dan het venster.
+        footer = tk.Frame(
+            self,
+            bg=WIT,
+            highlightbackground=RAND,
+            highlightthickness=1,
+            padx=28,
+            pady=14,
+        )
+        footer.pack(side="bottom", fill="x")
+
+        ttk.Button(
+            footer,
+            text="Doorgaan naar data laden",
+            style="RSO.TButton",
+            command=self.open_main_screen,
+        ).pack(side="right")
+
+        ttk.Button(
+            footer,
+            text="Uitloggen",
+            style="Danger.TButton",
+            command=self.show_login_screen,
+        ).pack(side="right", padx=(0, 12))
+
+        # Scrollbare inhoud
+        outer = tk.Frame(self, bg=ACHTERGROND)
+        outer.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(
+            outer,
+            bg=ACHTERGROND,
+            highlightthickness=0,
+        )
+        scrollbar = ttk.Scrollbar(
+            outer,
+            orient="vertical",
+            command=canvas.yview,
+        )
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        content = tk.Frame(canvas, bg=ACHTERGROND)
+        content_window = canvas.create_window(
+            (0, 0),
+            window=content,
+            anchor="nw",
+        )
+
+        def update_scrollregion(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def resize_content(event):
+            canvas.itemconfigure(content_window, width=event.width)
+
+        content.bind("<Configure>", update_scrollregion)
+        canvas.bind("<Configure>", resize_content)
+
+        # Titel
+        title_area = tk.Frame(content, bg=ACHTERGROND)
+        title_area.pack(fill="x", padx=55, pady=(34, 18))
+
+        tk.Label(
+            title_area,
+            text="Welkom bij de Datakwaliteit Monitor",
+            font=("Segoe UI", 26, "bold"),
+            bg=ACHTERGROND,
+            fg=RIJKS_DONKERBLAUW,
+        ).pack(anchor="w")
+
+        tk.Label(
+            title_area,
+            text=(
+                "Lees eerst waarvoor deze applicatie dient en hoe u een "
+                "bestand correct controleert."
+            ),
+            font=("Segoe UI", 11),
+            bg=ACHTERGROND,
+            fg=SUBTEKST,
+        ).pack(anchor="w", pady=(6, 0))
+
+        # Introductiekaart
+        intro_card = tk.Frame(
+            content,
+            bg=WIT,
+            highlightbackground=RAND,
+            highlightthickness=1,
+            padx=28,
+            pady=24,
+        )
+        intro_card.pack(fill="x", padx=55, pady=(0, 18))
+
+        tk.Frame(
+            intro_card,
+            bg=RIJKS_GEEL,
+            height=7,
+        ).pack(fill="x", pady=(0, 20))
+
+        tk.Label(
+            intro_card,
+            text="Waarvoor dient deze applicatie?",
+            font=("Segoe UI", 17, "bold"),
+            bg=WIT,
+            fg=RIJKS_DONKERBLAUW,
+        ).pack(anchor="w")
+
+        tk.Label(
+            intro_card,
+            text=(
+                "De Datakwaliteit Monitor ondersteunt het ETL-laadproces "
+                "EPT_030_PERS_PERSONEELNRS. De applicatie controleert of een "
+                "HRO-personeelsbestand technisch en inhoudelijk geschikt is "
+                "om verder te worden verwerkt.\n\n"
+                "Eerst wordt gecontroleerd of alle verwachte kolommen aanwezig "
+                "zijn en in de juiste volgorde staan. Daarna worden inhoudelijke "
+                "controles uitgevoerd, zoals lege verplichte velden, ongeldige "
+                "datums, onjuiste FTE-waarden, onlogische arbeidsduur en dubbele "
+                "registraties."
+            ),
+            font=("Segoe UI", 10),
+            bg=WIT,
+            fg=TEKST,
+            justify="left",
+            wraplength=1100,
+        ).pack(anchor="w", pady=(12, 0))
+
+        # Stappenkaart
+        steps_card = tk.Frame(
+            content,
+            bg=WIT,
+            highlightbackground=RAND,
+            highlightthickness=1,
+            padx=28,
+            pady=24,
+        )
+        steps_card.pack(fill="x", padx=55, pady=(0, 18))
+
+        tk.Label(
+            steps_card,
+            text="Zo gebruikt u de monitor",
+            font=("Segoe UI", 17, "bold"),
+            bg=WIT,
+            fg=RIJKS_DONKERBLAUW,
+        ).pack(anchor="w", pady=(0, 18))
+
+        steps = [
+            ("1", "Selecteer het bestand", "Kies een CSV-, XLS- of XLSX-bestand met HRO-personeelsgegevens."),
+            ("2", "Controleer de bestandsstructuur", "De applicatie vergelijkt de kolommen met de voorgeschreven structuur."),
+            ("3", "Start de inhoudelijke controle", "De controleknop wordt beschikbaar zodra de structuur correct is."),
+            ("4", "Beoordeel de resultaten", "Bekijk de kwaliteitsscore, ETL-status en het gedetailleerde foutenlogboek."),
+            ("5", "Exporteer het foutenlogboek", "Sla gevonden fouten op als CSV- of Excelbestand voor herstel en opvolging."),
+        ]
+
+        for number, heading, description in steps:
+            row = tk.Frame(steps_card, bg=WIT)
+            row.pack(fill="x", pady=7)
+
+            number_label = tk.Label(
+                row,
+                text=number,
+                font=("Segoe UI", 11, "bold"),
+                bg=RIJKS_BLAUW,
+                fg=WIT,
+                width=3,
+                pady=7,
+            )
+            number_label.pack(side="left", anchor="n")
+
+            text_frame = tk.Frame(row, bg=WIT)
+            text_frame.pack(side="left", fill="x", expand=True, padx=(14, 0))
+
+            tk.Label(
+                text_frame,
+                text=heading,
+                font=("Segoe UI", 10, "bold"),
+                bg=WIT,
+                fg=TEKST,
+            ).pack(anchor="w")
+
+            tk.Label(
+                text_frame,
+                text=description,
+                font=("Segoe UI", 10),
+                bg=WIT,
+                fg=SUBTEKST,
+                justify="left",
+                wraplength=1000,
+            ).pack(anchor="w", pady=(2, 0))
+
+        # Aandachtspunten
+        warning_card = tk.Frame(
+            content,
+            bg=WAARSCHUWING_LICHT,
+            highlightbackground=RIJKS_GEEL,
+            highlightthickness=1,
+            padx=24,
+            pady=20,
+        )
+        warning_card.pack(fill="x", padx=55, pady=(0, 20))
+
+        tk.Label(
+            warning_card,
+            text="Belangrijke aandachtspunten",
+            font=("Segoe UI", 13, "bold"),
+            bg=WAARSCHUWING_LICHT,
+            fg=RIJKS_DONKERBLAUW,
+        ).pack(anchor="w")
+
+        tk.Label(
+            warning_card,
+            text=(
+                "• Pas de kolomnamen en kolomvolgorde niet handmatig aan in de applicatie.\n"
+                "• Een geblokkeerde ETL-status betekent dat het bestand eerst moet worden gecorrigeerd.\n"
+                "• De monitor wijzigt de brondata niet; de applicatie leest en controleert alleen.\n"
+                "• Controleer het geëxporteerde foutenlogboek voordat het bestand opnieuw wordt aangeboden."
+            ),
+            font=("Segoe UI", 10),
+            bg=WAARSCHUWING_LICHT,
+            fg=TEKST,
+            justify="left",
+            wraplength=1050,
+        ).pack(anchor="w", pady=(10, 0))
+
+        # Extra witruimte onderaan de scrollbare uitleg.
+        tk.Frame(content, bg=ACHTERGROND, height=24).pack(fill="x")
+
+    def open_main_screen(self):
+        """Opent veilig het scherm voor het inladen van bestanden."""
+        try:
+            self.show_main_screen()
+        except Exception as exception:
+            messagebox.showerror(
+                "Scherm kon niet worden geopend",
+                (
+                    "Het scherm voor data-invoer kon niet worden geopend.\n\n"
+                    f"Technische melding: {exception}"
+                ),
+            )
+
+    # -----------------------------------------------------
+    # HOOFDSCHERM
+    # -----------------------------------------------------
+
+    def show_main_screen(self):
+        self.clear_window()
+
+        # Header
+        header = tk.Frame(
+            self,
+            bg=RIJKS_DONKERBLAUW,
+            height=88,
+        )
+        header.pack(fill="x")
+        header.pack_propagate(False)
+
+        tk.Label(
+            header,
+            text="Rijksschoonmaakorganisatie",
+            font=("Segoe UI", 16, "bold"),
+            bg=RIJKS_DONKERBLAUW,
+            fg=WIT,
+        ).pack(
+            side="left",
+            padx=28,
+        )
+
+        tk.Label(
+            header,
+            text="ETL Data Portaal",
+            font=("Segoe UI", 12),
+            bg=RIJKS_DONKERBLAUW,
+            fg="#D8E8F2",
+        ).pack(
+            side="left",
+        )
+
+        # Hoofdcontainer
+        body = tk.Frame(self, bg=ACHTERGROND)
+        body.pack(fill="both", expand=True)
+
+        # Sidebar
+        sidebar = tk.Frame(
+            body,
+            bg=WIT,
+            width=265,
+            highlightbackground=RAND,
+            highlightthickness=1,
+        )
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
+
+        tk.Frame(
+            sidebar,
+            bg=RIJKS_GEEL,
+            height=8,
+        ).pack(fill="x")
+
+        tk.Label(
+            sidebar,
+            text="Navigatie",
+            font=("Segoe UI", 13, "bold"),
+            bg=WIT,
+            fg=RIJKS_DONKERBLAUW,
+        ).pack(
+            anchor="w",
+            padx=22,
+            pady=(24, 16),
+        )
+
+        tk.Label(
+            sidebar,
+            text="DATAKWALITEIT",
+            font=("Segoe UI", 9, "bold"),
+            bg=WIT,
+            fg=SUBTEKST,
+        ).pack(
+            anchor="w",
+            padx=22,
+        )
+
+        tk.Label(
+            sidebar,
+            text="Data laden en controleren",
+            font=("Segoe UI", 10, "bold"),
+            bg=RIJKS_LICHTBLAUW,
+            fg=RIJKS_DONKERBLAUW,
+            padx=12,
+            pady=11,
+            anchor="w",
+        ).pack(
+            fill="x",
+            padx=14,
+            pady=(8, 16),
+        )
+
+        self.create_separator(sidebar, pady=10)
+
+        tk.Label(
+            sidebar,
+            text="ACTIEF LAADPROCES",
+            font=("Segoe UI", 9, "bold"),
+            bg=WIT,
+            fg=SUBTEKST,
+        ).pack(
+            anchor="w",
+            padx=22,
+            pady=(8, 4),
+        )
+
+        tk.Label(
+            sidebar,
+            text="EPT_030_PERS_PERSONEELNRS",
+            font=("Segoe UI", 9),
+            bg=WIT,
+            fg=TEKST,
+            wraplength=210,
+            justify="left",
+        ).pack(
+            anchor="w",
+            padx=22,
+            pady=(0, 16),
+        )
+
+        self.sidebar_status_label = tk.Label(
+            sidebar,
+            text="Nog geen bestand ingeladen",
+            font=("Segoe UI", 9, "bold"),
+            bg=WAARSCHUWING_LICHT,
+            fg=SUBTEKST,
+            padx=12,
+            pady=10,
+            wraplength=205,
+            justify="left",
+        )
+        self.sidebar_status_label.pack(
+            fill="x",
+            padx=14,
+        )
+
+        # Onderste knoppen
+        ttk.Button(
+            sidebar,
+            text="Nieuw bestand",
+            style="Secondary.TButton",
+            command=self.reset_application,
+        ).pack(
+            side="bottom",
+            fill="x",
+            padx=18,
+            pady=(0, 10),
+        )
+
+        ttk.Button(
+            sidebar,
+            text="Uitloggen",
+            style="Danger.TButton",
+            command=self.logout,
+        ).pack(
+            side="bottom",
+            fill="x",
+            padx=18,
+            pady=(0, 10),
+        )
+
+        # Content
+        content = tk.Frame(body, bg=ACHTERGROND)
+        content.pack(side="right", fill="both", expand=True)
+
+        title_frame = tk.Frame(content, bg=ACHTERGROND)
+        title_frame.pack(fill="x", padx=30, pady=(26, 8))
+
+        tk.Label(
+            title_frame,
+            text="Data laden en controleren",
+            font=("Segoe UI", 24, "bold"),
+            bg=ACHTERGROND,
+            fg=RIJKS_DONKERBLAUW,
+        ).pack(anchor="w")
+
+        tk.Label(
+            title_frame,
+            text="Controleer de structuur en inhoudelijke kwaliteit van het HRO-personeelsbestand.",
+            font=("Segoe UI", 10),
+            bg=ACHTERGROND,
+            fg=SUBTEKST,
+        ).pack(anchor="w", pady=(4, 0))
+
+        action_bar = tk.Frame(
+            content,
+            bg=WIT,
+            highlightbackground=RAND,
+            highlightthickness=1,
+            padx=18,
+            pady=14,
+        )
+        action_bar.pack(fill="x", padx=30, pady=(8, 12))
+
+        ttk.Button(
+            action_bar,
+            text="Bestand selecteren",
+            style="RSO.TButton",
+            command=self.select_file,
+        ).pack(side="left")
+
+        self.file_name_label = tk.Label(
+            action_bar,
+            text="Geen bestand geselecteerd",
+            font=("Segoe UI", 10),
+            bg=WIT,
+            fg=SUBTEKST,
+        )
+        self.file_name_label.pack(side="left", padx=18)
+
+        ttk.Button(
+            action_bar,
+            text="Verwachte kolommen",
+            style="Secondary.TButton",
+            command=self.show_expected_columns,
+        ).pack(side="right")
+
+        self.notebook = ttk.Notebook(content)
+        self.notebook.pack(
+            fill="both",
+            expand=True,
+            padx=30,
+            pady=(0, 25),
+        )
+
+        self.data_tab = tk.Frame(self.notebook, bg=WIT)
+        self.results_tab = tk.Frame(self.notebook, bg=WIT)
+
+        self.notebook.add(
+            self.data_tab,
+            text="Brondata en structuurcontrole",
+        )
+        self.notebook.add(
+            self.results_tab,
+            text="Resultaten kwaliteitscontrole",
+        )
+
+        self.build_data_tab()
+        self.build_results_tab()
+
+    # -----------------------------------------------------
+    # TAB: BRONDATA
+    # -----------------------------------------------------
+
+    def build_data_tab(self):
+        status_frame = tk.Frame(
+            self.data_tab,
+            bg=WIT,
+            padx=18,
+            pady=15,
+        )
+        status_frame.pack(fill="x")
+
+        self.structure_status_label = tk.Label(
+            status_frame,
+            text="Selecteer een CSV- of Excelbestand.",
+            font=("Segoe UI", 10),
+            bg=WIT,
+            fg=SUBTEKST,
+            justify="left",
+        )
+        self.structure_status_label.pack(side="left")
+
+        self.validate_button = ttk.Button(
+            status_frame,
+            text="Start inhoudelijke kwaliteitscontrole",
+            style="RSO.TButton",
+            command=self.start_validation,
+            state="disabled",
+        )
+        self.validate_button.pack(side="right")
+
+        table_frame = tk.Frame(
+            self.data_tab,
+            bg=WIT,
+        )
+        table_frame.pack(
+            fill="both",
+            expand=True,
+            padx=18,
+            pady=(0, 18),
+        )
+
+        self.data_tree = ttk.Treeview(
+            table_frame,
+            show="headings",
+        )
+
+        y_scroll = ttk.Scrollbar(
+            table_frame,
+            orient="vertical",
+            command=self.data_tree.yview,
+        )
+
+        x_scroll = ttk.Scrollbar(
+            table_frame,
+            orient="horizontal",
+            command=self.data_tree.xview,
+        )
+
+        self.data_tree.configure(
+            yscrollcommand=y_scroll.set,
+            xscrollcommand=x_scroll.set,
+        )
+
+        self.data_tree.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+
+        table_frame.grid_rowconfigure(0, weight=1)
+        table_frame.grid_columnconfigure(0, weight=1)
+
+    # -----------------------------------------------------
+    # TAB: RESULTATEN
+    # -----------------------------------------------------
+
+    def build_results_tab(self):
+        self.metrics_frame = tk.Frame(
+            self.results_tab,
+            bg=WIT,
+            padx=12,
+            pady=16,
+        )
+        self.metrics_frame.pack(fill="x")
+
+        self.create_metric_card(self.metrics_frame, "Kwaliteitsscore", "-", 0)
+        self.create_metric_card(self.metrics_frame, "Totaal gecontroleerd", "-", 1)
+        self.create_metric_card(self.metrics_frame, "Totaal aantal fouten", "-", 2)
+        self.create_metric_card(self.metrics_frame, "Rijen met fouten", "-", 3)
+
+        self.etl_status_label = tk.Label(
+            self.results_tab,
+            text="De kwaliteitscontrole is nog niet uitgevoerd.",
+            font=("Segoe UI", 10, "bold"),
+            bg=RIJKS_LICHTBLAUW,
+            fg=RIJKS_DONKERBLAUW,
+            padx=14,
+            pady=12,
+            anchor="w",
+        )
+        self.etl_status_label.pack(
+            fill="x",
+            padx=18,
+            pady=(0, 12),
+        )
+
+        log_header = tk.Frame(
+            self.results_tab,
+            bg=WIT,
+        )
+        log_header.pack(
+            fill="x",
+            padx=18,
+            pady=(0, 10),
+        )
+
+        tk.Label(
+            log_header,
+            text="Gedetailleerd foutenlogboek",
+            font=("Segoe UI", 13, "bold"),
+            bg=WIT,
+            fg=RIJKS_DONKERBLAUW,
+        ).pack(side="left")
+
+        self.export_button = ttk.Button(
+            log_header,
+            text="Exporteer foutenlogboek",
+            style="Secondary.TButton",
+            command=self.export_error_log,
+            state="disabled",
+        )
+        self.export_button.pack(side="right")
+
+        table_frame = tk.Frame(
+            self.results_tab,
+            bg=WIT,
+        )
+        table_frame.pack(
+            fill="both",
+            expand=True,
+            padx=18,
+            pady=(0, 18),
+        )
+
+        self.error_tree = ttk.Treeview(
+            table_frame,
+            show="headings",
+        )
+
+        y_scroll = ttk.Scrollbar(
+            table_frame,
+            orient="vertical",
+            command=self.error_tree.yview,
+        )
+
+        x_scroll = ttk.Scrollbar(
+            table_frame,
+            orient="horizontal",
+            command=self.error_tree.xview,
+        )
+
+        self.error_tree.configure(
+            yscrollcommand=y_scroll.set,
+            xscrollcommand=x_scroll.set,
+        )
+
+        self.error_tree.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+
+        table_frame.grid_rowconfigure(0, weight=1)
+        table_frame.grid_columnconfigure(0, weight=1)
+
+    # -----------------------------------------------------
+    # BESTANDEN
+    # -----------------------------------------------------
+
+    def select_file(self):
+        file_path = filedialog.askopenfilename(
+            title="Selecteer HRO-personeelsbestand",
+            filetypes=[
+                ("Ondersteunde bestanden", "*.csv *.xlsx *.xls"),
+                ("CSV-bestand", "*.csv"),
+                ("Excel-bestand", "*.xlsx *.xls"),
+            ],
+        )
+
+        if not file_path:
+            return
+
+        try:
+            dataframe = self.read_file(file_path)
+        except Exception as exception:
+            messagebox.showerror(
+                "Bestand kon niet worden geopend",
+                str(exception),
+            )
+            return
+
+        self.selected_file_path = file_path
+        self.source_dataframe = dataframe
+        self.validation_results = None
+
+        self.file_name_label.config(
+            text=Path(file_path).name,
+            fg=TEKST,
+        )
+
+        self.sidebar_status_label.config(
+            text="Bronbestand is ingeladen",
+            bg=SUCCES_LICHT,
+            fg=SUCCES,
+        )
+
+        self.show_dataframe(
+            tree=self.data_tree,
+            dataframe=dataframe.head(100),
+        )
+
+        result = self.check_structure(dataframe)
+        self.display_structure_result(result)
+        self.clear_validation_results()
+
+    def read_file(self, file_path: str) -> pd.DataFrame:
+        suffix = Path(file_path).suffix.lower()
+
+        if suffix == ".csv":
+            try:
+                dataframe = pd.read_csv(
+                    file_path,
+                    sep=None,
+                    engine="python",
+                    encoding="utf-8-sig",
+                )
+            except UnicodeDecodeError:
+                dataframe = pd.read_csv(
+                    file_path,
+                    sep=None,
+                    engine="python",
+                    encoding="latin-1",
+                )
+
+        elif suffix in {".xlsx", ".xls"}:
+            dataframe = pd.read_excel(file_path)
+
+        else:
+            raise ValueError(
+                "Onjuist bestandsformaat. Kies een CSV- of Excelbestand."
+            )
+
+        if dataframe.empty:
+            raise ValueError(
+                "Het geselecteerde bestand bevat geen gegevens."
+            )
+
+        dataframe.columns = [
+            str(column).strip()
+            for column in dataframe.columns
+        ]
+
+        return dataframe
+
+    # -----------------------------------------------------
+    # STRUCTUURCONTROLE
+    # -----------------------------------------------------
+
+    def check_structure(self, dataframe: pd.DataFrame) -> dict:
+        actual_columns = list(dataframe.columns)
+
+        missing_columns = [
+            column
+            for column in EXPECTED_COLUMNS
+            if column not in actual_columns
+        ]
+
+        extra_columns = [
+            column
+            for column in actual_columns
+            if column not in EXPECTED_COLUMNS
+        ]
+
+        correct_order = actual_columns == EXPECTED_COLUMNS
+
+        return {
+            "structure_valid": (
+                not missing_columns
+                and not extra_columns
+                and correct_order
+            ),
+            "missing_columns": missing_columns,
+            "extra_columns": extra_columns,
+            "correct_order": correct_order,
+        }
+
+    def display_structure_result(self, result: dict):
+        if result["structure_valid"]:
+            self.structure_status_label.config(
+                text=(
+                    "Structuurcontrole geslaagd. Alle verwachte kolommen "
+                    "zijn aanwezig en staan in de juiste volgorde."
+                ),
+                fg=SUCCES,
+            )
+
+            self.validate_button.config(state="normal")
+            return
+
+        messages = ["De bestandsstructuur is niet correct."]
+
+        if result["missing_columns"]:
+            messages.append(
+                "Ontbrekend: " + ", ".join(result["missing_columns"])
+            )
+
+        if result["extra_columns"]:
+            messages.append(
+                "Extra: " + ", ".join(result["extra_columns"])
+            )
+
+        if not result["correct_order"]:
+            messages.append(
+                "De kolommen staan niet in de juiste volgorde."
+            )
+
+        self.structure_status_label.config(
+            text="\n".join(messages),
+            fg=FOUT,
+        )
+
+        self.validate_button.config(state="disabled")
+
+    def show_expected_columns(self):
+        window = tk.Toplevel(self)
+        window.title("Verwachte kolommen")
+        window.geometry("540x590")
+        window.configure(bg=ACHTERGROND)
+        window.transient(self)
+
+        header = tk.Frame(window, bg=RIJKS_DONKERBLAUW, height=72)
+        header.pack(fill="x")
+        header.pack_propagate(False)
+
+        tk.Label(
+            header,
+            text="Verwachte bestandsstructuur",
+            font=("Segoe UI", 16, "bold"),
+            bg=RIJKS_DONKERBLAUW,
+            fg=WIT,
+        ).pack(
+            anchor="w",
+            padx=22,
+            pady=22,
+        )
+
+        container = tk.Frame(
+            window,
+            bg=WIT,
+            highlightbackground=RAND,
+            highlightthickness=1,
+        )
+        container.pack(
+            fill="both",
+            expand=True,
+            padx=20,
+            pady=20,
+        )
+
+        tree = ttk.Treeview(
+            container,
+            columns=("Positie", "Kolomnaam"),
+            show="headings",
+        )
+
+        tree.heading("Positie", text="Positie")
+        tree.heading("Kolomnaam", text="Kolomnaam")
+
+        tree.column("Positie", width=80, anchor="center")
+        tree.column("Kolomnaam", width=380)
+
+        for position, column in enumerate(EXPECTED_COLUMNS, start=1):
+            tree.insert(
+                "",
+                "end",
+                values=(position, column),
+            )
+
+        tree.pack(
+            fill="both",
+            expand=True,
+            padx=12,
+            pady=12,
+        )
+
+    # -----------------------------------------------------
+    # VALIDATIE
+    # -----------------------------------------------------
+
+    def start_validation(self):
+        if self.source_dataframe is None:
+            messagebox.showwarning(
+                "Geen bestand",
+                "Selecteer eerst een bestand.",
+            )
+            return
+
+        try:
+            self.validation_results = controleer_datakwaliteit(
+                self.source_dataframe
+            )
+        except Exception as exception:
+            messagebox.showerror(
+                "Validatie mislukt",
+                str(exception),
+            )
+            return
+
+        self.show_validation_results()
+        self.notebook.select(self.results_tab)
+
+        self.sidebar_status_label.config(
+            text="Kwaliteitscontrole is uitgevoerd",
+            bg=RIJKS_LICHTBLAUW,
+            fg=RIJKS_DONKERBLAUW,
+        )
+
+    def show_validation_results(self):
+        results = self.validation_results
+
+        for widget in self.metrics_frame.winfo_children():
+            widget.destroy()
+
+        self.create_metric_card(
+            self.metrics_frame,
+            "Kwaliteitsscore",
+            f"{results['score']}%",
+            0,
+        )
+        self.create_metric_card(
+            self.metrics_frame,
+            "Totaal gecontroleerd",
+            str(results["total_records"]),
+            1,
+        )
+        self.create_metric_card(
+            self.metrics_frame,
+            "Totaal aantal fouten",
+            str(results["total_errors"]),
+            2,
+        )
+        self.create_metric_card(
+            self.metrics_frame,
+            "Rijen met fouten",
+            str(results["records_with_errors"]),
+            3,
+        )
+
+        if results["passed"]:
+            self.etl_status_label.config(
+                text=(
+                    "ETL-status: SUCCESVOL. Het bestand voldoet aan "
+                    "alle ingestelde datakwaliteitseisen."
+                ),
+                bg=SUCCES_LICHT,
+                fg=SUCCES,
+            )
+        else:
+            self.etl_status_label.config(
+                text=(
+                    "ETL-status: GEBLOKKEERD. Het bestand bevat "
+                    "datakwaliteitsfouten en kan niet worden verwerkt."
+                ),
+                bg=FOUT_LICHT,
+                fg=FOUT,
+            )
+
+        errors_dataframe = results["errors"]
+
+        self.show_dataframe(
+            tree=self.error_tree,
+            dataframe=errors_dataframe,
+        )
+
+        self.export_button.config(
+            state="normal" if not errors_dataframe.empty else "disabled"
+        )
+
+        if errors_dataframe.empty:
+            messagebox.showinfo(
+                "Kwaliteitscontrole",
+                "De controle is afgerond. Er zijn geen fouten aangetroffen.",
+            )
+        else:
+            messagebox.showwarning(
+                "Kwaliteitscontrole",
+                (
+                    f"De controle is afgerond.\n\n"
+                    f"Aantal fouten: {results['total_errors']}\n"
+                    f"Rijen met fouten: {results['records_with_errors']}"
+                ),
+            )
+
+    # -----------------------------------------------------
+    # DATA TONEN
+    # -----------------------------------------------------
+
+    def show_dataframe(self, tree: ttk.Treeview, dataframe: pd.DataFrame):
+        tree.delete(*tree.get_children())
+
+        columns = list(dataframe.columns)
+        tree["columns"] = columns
+
+        for column in columns:
+            tree.heading(column, text=column)
+
+            if column == "Omschrijving":
+                width = 430
+            elif column == "Waarde":
+                width = 185
+            else:
+                width = 145
+
+            tree.column(
+                column,
+                width=width,
+                minwidth=80,
+                anchor="w",
+                stretch=False,
+            )
+
+        for _, row in dataframe.iterrows():
+            values = [
+                "" if pd.isna(value) else str(value)
+                for value in row
+            ]
+
+            tree.insert(
+                "",
+                "end",
+                values=values,
+            )
+
+    # -----------------------------------------------------
+    # EXPORT
+    # -----------------------------------------------------
+
+    def export_error_log(self):
+        if self.validation_results is None:
+            return
+
+        errors_dataframe = self.validation_results["errors"]
+
+        if errors_dataframe.empty:
+            messagebox.showinfo(
+                "Geen fouten",
+                "Er zijn geen fouten om te exporteren.",
+            )
+            return
+
+        output_path = filedialog.asksaveasfilename(
+            title="Foutenlogboek opslaan",
+            defaultextension=".csv",
+            filetypes=[
+                ("CSV-bestand", "*.csv"),
+                ("Excel-bestand", "*.xlsx"),
+            ],
+            initialfile="etl_foutenlogboek.csv",
+        )
+
+        if not output_path:
+            return
+
+        try:
+            suffix = Path(output_path).suffix.lower()
+
+            if suffix == ".xlsx":
+                errors_dataframe.to_excel(
+                    output_path,
+                    index=False,
+                )
+            else:
+                errors_dataframe.to_csv(
+                    output_path,
+                    index=False,
+                    encoding="utf-8-sig",
+                )
+
+            messagebox.showinfo(
+                "Export geslaagd",
+                f"Het foutenlogboek is opgeslagen:\n\n{output_path}",
+            )
+
+        except Exception as exception:
+            messagebox.showerror(
+                "Export mislukt",
+                str(exception),
+            )
+
+    # -----------------------------------------------------
+    # RESET / UITLOGGEN
+    # -----------------------------------------------------
+
+    def clear_validation_results(self):
+        self.validation_results = None
+
+        for widget in self.metrics_frame.winfo_children():
+            widget.destroy()
+
+        self.create_metric_card(self.metrics_frame, "Kwaliteitsscore", "-", 0)
+        self.create_metric_card(self.metrics_frame, "Totaal gecontroleerd", "-", 1)
+        self.create_metric_card(self.metrics_frame, "Totaal aantal fouten", "-", 2)
+        self.create_metric_card(self.metrics_frame, "Rijen met fouten", "-", 3)
+
+        self.etl_status_label.config(
+            text="De kwaliteitscontrole is nog niet uitgevoerd.",
+            bg=RIJKS_LICHTBLAUW,
+            fg=RIJKS_DONKERBLAUW,
+        )
+
+        self.error_tree.delete(*self.error_tree.get_children())
+        self.error_tree["columns"] = ()
+        self.export_button.config(state="disabled")
+
+    def reset_application(self):
+        self.source_dataframe = None
+        self.validation_results = None
+        self.selected_file_path = None
+
+        self.file_name_label.config(
+            text="Geen bestand geselecteerd",
+            fg=SUBTEKST,
+        )
+
+        self.sidebar_status_label.config(
+            text="Nog geen bestand ingeladen",
+            bg=WAARSCHUWING_LICHT,
+            fg=SUBTEKST,
+        )
+
+        self.structure_status_label.config(
+            text="Selecteer een CSV- of Excelbestand.",
+            fg=SUBTEKST,
+        )
+
+        self.validate_button.config(state="disabled")
+
+        self.data_tree.delete(*self.data_tree.get_children())
+        self.data_tree["columns"] = ()
+
+        self.clear_validation_results()
+        self.notebook.select(self.data_tab)
+
+    def logout(self):
+        confirm = messagebox.askyesno(
+            "Uitloggen",
+            "Weet je zeker dat je wilt uitloggen?",
+        )
+
+        if confirm:
+            self.source_dataframe = None
+            self.validation_results = None
+            self.selected_file_path = None
+            self.show_login_screen()
+
+
+# =========================================================
+# APPLICATIE STARTEN
+# =========================================================
+
+if __name__ == "__main__":
+    app = RSODataQualityApp()
+    app.mainloop()
